@@ -8,8 +8,7 @@ pip install -r requirements.txt
 ```
 
 ## Run
-- First, set the environment variables in the `.env` file. You can use the `.env.local` as a template.
-- Then, create a new folder in the same path as this README file, and call it `generated_images`.
+- Set the environment variables in the `.env` file. You can use the `.env.local` as a template.
 - Rename `models.yaml.local` to `models.yaml`.
 - Run the app with `python app.py`.
 

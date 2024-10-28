@@ -18,8 +18,6 @@ def generate_image(prompt: str, model: str, num_outputs: int = 1):
         list: List of generated image URLs
     """
     client = replicate.Client(api_token=os.getenv("REPLICATE_API_KEY"))
-    if model.startswith("black-forest-labs"):
-        prompt = f'{prompt} "FLUX SCHNELL"'
 
     output = client.run(
         model,
