@@ -88,21 +88,25 @@ def save_generated_image(image_url):
 
 
 def generate_images(prompt, model_name, num_outputs):
+    # Create generated_images directory if it doesn't exist
+    os.makedirs("generated_images", exist_ok=True)
+
     # Get the actual model identifier from the models dictionary
     models, _ = load_models()
     model_name = models[model_name]
 
     # Generate images using the full model identifier
-    output = generate_image(prompt, model_name, num_outputs)
+    output = generate_image(prompt, model_name, int(num_outputs))
 
-    # Save images
+    # Save images and collect absolute paths
     image_paths = []
     for i, item in enumerate(output):
-        path = f"generated_images/generated_image_{i}.png"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.abspath(f"generated_images/generated_image_{i}_{timestamp}.png")
         with open(path, "wb") as f:
             f.write(item.read())
         image_paths.append(path)
-
+    print(f"Generated images: {image_paths}")
     return image_paths
 
 
@@ -166,12 +170,10 @@ with gr.Blocks() as app:
             # Settings section
             with gr.Accordion("Settings", open=False):
                 model_dropdown = gr.Dropdown(
-                    choices=list(models.keys()),
-                    value=default_model,
-                    label="Model",
+                    choices=list(models.keys()), value=default_model, label="Model"
                 )
                 num_outputs = gr.Dropdown(
-                    choices=[str(i) for i in range(1, 11)],
+                    choices=["1"],  # Since we're only showing one image
                     value="1",
                     label="Number of Outputs",
                 )
@@ -179,15 +181,9 @@ with gr.Blocks() as app:
             # Generate button
             generate_btn = gr.Button("Generate Image")
 
-            # Image gallery
-            gallery = gr.Gallery(
-                label="Generated Images",
-                show_label=True,
-                elem_id="gallery",
-                columns=[2],
-                rows=[2],
-                height="auto",
-                visible=False,
+            # Single image output
+            image_output = gr.Image(
+                label="Generated Image", show_label=True, type="filepath", visible=True
             )
 
             # Fine-tune and Edit buttons (hidden by default)
@@ -200,32 +196,39 @@ with gr.Blocks() as app:
 
             # Handle generate button click
             def on_generate(prompt, model, num_out):
-                image_paths = generate_images(prompt, model, int(num_out))
-                return {
-                    gallery: image_paths,
-                    gallery: gr.update(visible=True),
-                    action_buttons: gr.update(visible=True),
-                }
+                try:
+                    image_paths = generate_images(prompt, model, int(num_out))
+                    print(f"Generated images (on_generate): {image_paths}")
+                    # Return just the first image path since we're only showing one image
+                    return {
+                        image_output: image_paths[0],
+                        action_buttons: gr.update(visible=True),
+                    }
+                except Exception as e:
+                    print(f"Error generating images: {str(e)}")
+                    return {
+                        image_output: None,
+                        action_buttons: gr.update(visible=False),
+                    }
 
             generate_btn.click(
                 fn=on_generate,
                 inputs=[prompt_input, model_dropdown, num_outputs],
-                outputs=[gallery, gallery, action_buttons],
+                outputs=[image_output, action_buttons],
             )
 
             # Handle clear button click
             def clear_all():
                 return {
                     prompt_input: "",
-                    gallery: None,
-                    gallery: gr.update(visible=False),
+                    image_output: None,
                     action_buttons: gr.update(visible=False),
                 }
 
             clear_btn.click(
                 fn=clear_all,
                 inputs=[],
-                outputs=[prompt_input, gallery, gallery, action_buttons],
+                outputs=[prompt_input, image_output, action_buttons],
             )
 
             # Handle fine-tune and edit buttons
