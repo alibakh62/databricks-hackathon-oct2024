@@ -8,6 +8,16 @@ import yaml
 from datetime import datetime
 import requests
 from image_gen import generate_image
+import imageio
+import numpy as np
+import replicate
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Initialize the Replicate client
+client = replicate.Client(api_token=os.getenv("REPLICATE_API_KEY"))
 
 
 def load_models():
@@ -238,6 +248,169 @@ with gr.Blocks() as app:
 
             fine_tune_btn.click(lambda: switch_to_tab(2))
             edit_btn.click(lambda: switch_to_tab(1))
+
+    with gr.Tab("Edit Image"):
+        with gr.Column():
+            # Original image upload/editor with mask
+            img_editor = gr.ImageMask(
+                label="Edit Image",
+                sources=["upload"],
+                height=1024,
+                width=1024,
+                layers=False,
+                transforms=[],
+                format="png",
+                show_label=True,
+            )
+
+            # Mask prompt input
+            mask_prompt = gr.Textbox(
+                label="Edit Prompt",
+                placeholder="Describe what you want to change in the selected area...",
+            )
+
+            # Apply edit button
+            apply_edit_btn = gr.Button("Apply Edit", interactive=False)
+
+            # Processing indicator
+            processing_indicator = gr.Markdown(
+                "Processing... Please wait.", visible=False
+            )
+
+            # Results gallery for inpainted images
+            inpainted_gallery = gr.Gallery(
+                label="Generated Variations",
+                show_label=True,
+                columns=2,
+                rows=2,
+                height="auto",
+                visible=True,  # Make it always visible
+                allow_preview=True,  # Enable image preview on click
+                preview=True,  # Show preview mode
+                object_fit="contain"  # Ensure images fit properly
+            )
+
+            # Download button for results
+            download_btn = gr.Button("Download Selected Images", visible=False)
+
+            def enable_edit_button(img):
+                print("Image uploaded/changed. Enabling edit button...")
+                return gr.update(interactive=True if img is not None else False)
+
+            def save_and_process_image(img):
+                print("Starting save_and_process_image...")
+                if img is None:
+                    print("No image provided")
+                    return None, None
+
+                try:
+                    print("Saving composite image and generating mask...")
+                    # Save the composite image
+                    composite_image = img["composite"]
+                    imageio.imwrite("input_image.png", composite_image)
+
+                    # Extract and save the mask
+                    alpha_channel = img["layers"][0][:, :, 3]
+                    mask = np.where(alpha_channel == 0, 0, 255).astype(np.uint8)
+                    imageio.imwrite("mask_image.png", mask)
+
+                    print("Image and mask saved successfully")
+                    return "input_image.png", "mask_image.png"
+                except Exception as e:
+                    print(f"Error in save_and_process_image: {str(e)}")
+                    return None, None
+
+            def apply_edit(img, prompt):
+                try:
+                    print("Starting apply_edit function...")
+                    
+                    # First save and process the image/mask
+                    input_path, mask_path = save_and_process_image(img)
+                    if not input_path or not mask_path:
+                        print("Failed to save image or mask")
+                        return (
+                            [],  # Empty list for gallery instead of None
+                            gr.update(visible=False),  # inpainted_gallery visibility
+                            gr.update(visible=False),  # download_btn visibility
+                            gr.update(value="", visible=False),  # processing_indicator
+                        )
+
+                    print("Starting inpainting process...")
+                    # Show processing results
+                    with open(input_path, "rb") as f_img, open(mask_path, "rb") as f_mask:
+                        input = {
+                            "mask": f_mask,
+                            "image": f_img,
+                            "prompt": prompt,
+                            "num_outputs": 4,
+                            "output_format": "png",
+                        }
+
+                        print("Calling Replicate API...")
+                        # Call the inpainting API
+                        output = client.run(
+                            "zsxkib/flux-dev-inpainting-controlnet:f9cb02cfd6b131af7ff9166b4bac5fdd2ed68bc282d2c049b95a23cea485e40d",
+                            input=input,
+                        )
+
+                        print("Saving inpainted results...")
+                        # Save inpainted results with timestamp
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        inpainted_paths = []
+                        
+                        # Create directory if it doesn't exist
+                        os.makedirs("inpainted_images", exist_ok=True)
+                        
+                        for i, item in enumerate(output):
+                            path = os.path.abspath(f"inpainted_images/inpainted_image_{i}_{timestamp}.png")
+                            with open(path, "wb") as f:
+                                f.write(item.read())
+                            inpainted_paths.append(path)
+                            print(f"Saved inpainted image {i} at: {path}")
+
+                        print("All inpainted images saved. Paths:", inpainted_paths)
+                        
+                        # Return the paths for the gallery along with other updates
+                        return (
+                            inpainted_paths,  # List of paths for gallery
+                            gr.update(visible=True),  # inpainted_gallery visibility
+                            gr.update(visible=True),  # download_btn visibility
+                            gr.update(value="Processing complete!", visible=False)  # processing indicator
+                        )
+
+                except Exception as e:
+                    print(f"Error in apply_edit: {str(e)}")
+                    traceback.print_exc()  # Print full traceback
+                    return (
+                        [],  # Empty list for gallery instead of None
+                        gr.update(visible=False),  # inpainted_gallery visibility
+                        gr.update(visible=False),  # download_btn visibility
+                        gr.update(value=f"Error: {str(e)}", visible=True)  # processing indicator
+                    )
+
+            # Event handlers
+            img_editor.change(
+                fn=enable_edit_button, 
+                inputs=[img_editor], 
+                outputs=[apply_edit_btn]
+            )
+
+            # Add a loading status to the apply_edit button click
+            apply_edit_btn.click(
+                fn=lambda: ([], gr.update(visible=True), gr.update(visible=False), gr.update(value="Processing... Please wait.", visible=True)),
+                inputs=None,
+                outputs=[inpainted_gallery, inpainted_gallery, download_btn, processing_indicator],
+                queue=False
+            ).then(
+                fn=apply_edit,
+                inputs=[img_editor, mask_prompt],
+                outputs=[
+                    inpainted_gallery,
+                    inpainted_gallery,
+                    download_btn,
+                    processing_indicator,
+                ]
+            )
 
 if __name__ == "__main__":
     app.launch()

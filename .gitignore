@@ -41,6 +41,9 @@ models.yaml
 *.json
 instructions.md
 image_instructions.md
+mask_image.png
+input_image.png
+*.png
 
 # Temp files
 *.tmp
