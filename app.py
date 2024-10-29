@@ -12,6 +12,16 @@ import imageio
 import numpy as np
 import replicate
 from dotenv import load_dotenv
+import json
+from google.cloud import storage
+from utils import GCSBucketManager, ModelConfig
+from image_gen import (
+    create_replicate_model,
+    start_training_job,
+    monitor_training_jobs,
+    get_model_details
+)
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -127,6 +137,28 @@ def clear_image_inputs():
         action_buttons: gr.update(visible=False),
         processing_status: gr.update(visible=False),
     }
+
+
+class GCSBucketManager:
+    def __init__(self, bucket_name, credentials_path):
+        self.bucket_name = bucket_name
+        self.credentials_path = credentials_path
+        self.storage_client = storage.Client.from_service_account_json(self.credentials_path)
+        self.bucket = self.storage_client.bucket(self.bucket_name)
+
+    def upload_file(self, source_path, destination_blob_name):
+        blob = self.bucket.blob(destination_blob_name)
+        blob.upload_from_filename(source_path)
+        return destination_blob_name
+
+    def make_blob_public(self, blob_name):
+        blob = self.bucket.blob(blob_name)
+        blob.make_public()
+        return blob.public_url
+
+    def get_public_url(self, blob_name):
+        blob = self.bucket.blob(blob_name)
+        return blob.public_url
 
 
 with gr.Blocks() as app:
@@ -410,6 +442,213 @@ with gr.Blocks() as app:
                     download_btn,
                     processing_indicator,
                 ]
+            )
+
+    with gr.Tab("Fine-tune Model"):
+        with gr.Column():
+            # Note text at the top
+            gr.Markdown("""
+                The fine-tuning process is done by uploading a file to the model. The file should be a zip file that contains 
+                the images to fine-tune the model. The name of files or their aspect ratio don't matter. The zip file should 
+                contain at least 10 images. The images should be in the PNG format. The proper resolution for the images is 1024x1024.
+            """)
+
+            # Settings section in a collapsible area
+            with gr.Accordion("Settings", open=True):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                model_name_input = gr.Textbox(
+                    label="Model Name",
+                    value=f"finetuned_inpainting_{timestamp}",
+                    placeholder="Enter model name..."
+                )
+                trigger_word_input = gr.Textbox(
+                    label="Trigger Word",
+                    value="MARKETER",
+                    placeholder="Enter trigger word..."
+                )
+                description_input = gr.Textbox(
+                    label="Description",
+                    value="a fine-tuned image generation model",
+                    placeholder="Enter model description..."
+                )
+
+            # File upload
+            file_upload = gr.File(
+                label="Upload Training Images (ZIP)",
+                file_types=[".zip"],
+                type="filepath"
+            )
+
+            # Start fine-tuning button (disabled by default)
+            start_finetune_btn = gr.Button("Start Fine-Tuning", interactive=False)
+
+            # Status display
+            status_output = gr.Markdown(visible=False)
+
+            def enable_start_button(file):
+                return gr.update(interactive=True if file is not None else False)
+
+            def start_finetuning(file_path, model_name, trigger_word, description):
+                try:
+                    print("Starting fine-tuning process...")
+                    
+                    # Upload file to GCS
+                    print("Uploading file to GCS...")
+                    bucket_name = os.getenv("GCS_BUCKET_NAME")
+                    credentials_path = os.getenv("GCS_CREDENTIALS_PATH")
+
+                    bucket_manager = GCSBucketManager(
+                        bucket_name=bucket_name,
+                        credentials_path=credentials_path
+                    )
+
+                    # Get the filename from the path
+                    filename = os.path.basename(file_path)
+                    
+                    # Upload the file
+                    uploaded_blob_name = bucket_manager.upload_file(
+                        source_path=file_path,
+                        destination_blob_name=filename
+                    )
+                    print(f"File uploaded as: {uploaded_blob_name}")
+
+                    # Make it public and get URL
+                    public_url = bucket_manager.make_blob_public(uploaded_blob_name)
+                    url = bucket_manager.get_public_url(uploaded_blob_name)
+                    print(f"Public URL: {url}")
+
+                    # Step 3.4.1 - Create the destination model
+                    print("\nStep 3.4.1 - Creating destination model...")
+                    try:
+                        username = os.getenv("USERNAME")
+                        if not username:
+                            raise ValueError("USERNAME environment variable not set")
+                        
+                        result = create_replicate_model(
+                            username=username,
+                            model_name=model_name,
+                            description=description
+                        )
+                        print("Model created successfully:", json.dumps(result, indent=2))
+                        
+                    except Exception as e:
+                        print(f"Failed to create model: {str(e)}")
+                        return gr.update(
+                            value=f"❌ Failed to create model: {str(e)}",
+                            visible=True
+                        )
+
+                    # Step 3.4.2 - Start the training job
+                    print("\nStep 3.4.2 - Starting training job...")
+                    try:
+                        result = start_training_job(
+                            username=username,
+                            model_name=model_name,
+                            data_url=url,
+                            trigger_word=trigger_word
+                        )
+                        print("Training job response:", json.dumps(result, indent=2))
+                        
+                        if not result:
+                            raise ValueError("Training job returned no result")
+                        
+                        # Step 3.4.3 - Monitor the training process
+                        print("\nStep 3.4.3 - Monitoring training process...")
+                        print("Waiting 10 seconds for training job to initialize...")
+                        time.sleep(10)  # Give the job time to start
+                        
+                        final_statuses = monitor_training_jobs(check_interval=60)
+                        print("Monitoring returned with statuses:", json.dumps(final_statuses, indent=2))
+                        
+                        if not final_statuses:
+                            print("Warning: No job statuses returned from monitoring")
+                            # Continue anyway as the job might still be successful
+                        
+                        print("\nFinal Status Summary:")
+                        print("-" * 40)
+                        for job_id, status in final_statuses.items():
+                            print(f"Job {job_id}: {status}")
+                        
+                        # Add a delay before getting model details
+                        print("Waiting 30 seconds for model to finalize...")
+                        time.sleep(30)
+                        
+                    except Exception as e:
+                        print(f"Failed to start/monitor training: {str(e)}")
+                        print(f"Full error details: {traceback.format_exc()}")
+                        return gr.update(
+                            value=f"❌ Failed during training process: {str(e)}",
+                            visible=True
+                        )
+
+                    # Step 3.4.1 - Get model details
+                    print("\nGetting model details...")
+                    try:
+                        model_details = get_model_details(
+                            owner=username,
+                            model_name=model_name
+                        )
+                        
+                        if not model_details:
+                            raise ValueError("Failed to get model details")
+                            
+                        model_url = model_details.get("url")
+                        if not model_url:
+                            raise ValueError("Model URL not found in response")
+                            
+                        model_id = model_details.get("latest_version", {}).get("id")
+                        if not model_id:
+                            raise ValueError("Model ID not found in response")
+
+                        # Step 3.4.2 - Update models.yaml
+                        print("\nUpdating models.yaml...")
+                        model_config = ModelConfig('models.yaml')
+                        model_config.add_or_update_model(
+                            model_name.replace("-", "_"),
+                            f"{model_url}?:{model_id}"
+                        )
+
+                        return gr.update(
+                            value="✅ Fine-tuning process completed successfully! Please go back to the image generation UI (Tab 1) and generate an image with the new model.",
+                            visible=True
+                        )
+
+                    except Exception as e:
+                        print(f"Failed to update model configuration: {str(e)}")
+                        return gr.update(
+                            value=f"❌ Failed to update model configuration: {str(e)}",
+                            visible=True
+                        )
+
+                except Exception as e:
+                    print(f"Error in fine-tuning process: {str(e)}")
+                    traceback.print_exc()
+                    return gr.update(
+                        value=f"❌ Error during fine-tuning: {str(e)}",
+                        visible=True
+                    )
+
+            # Event handlers
+            file_upload.change(
+                fn=enable_start_button,
+                inputs=[file_upload],
+                outputs=[start_finetune_btn]
+            )
+
+            start_finetune_btn.click(
+                fn=lambda: gr.update(value="⏳ Fine-tuning process started. This may take several minutes...", visible=True),
+                inputs=None,
+                outputs=status_output,
+                queue=False
+            ).then(
+                fn=start_finetuning,
+                inputs=[
+                    file_upload,
+                    model_name_input,
+                    trigger_word_input,
+                    description_input
+                ],
+                outputs=[status_output]
             )
 
 if __name__ == "__main__":
