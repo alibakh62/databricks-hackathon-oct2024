@@ -47,11 +47,11 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
         )
         progress(1.0, desc="Done!")
         return (
-            campaign_info,
-            gr.update(visible=True),  # Download Report button
-            gr.update(visible=True),  # Generate Email button
-            gr.update(visible=False),  # Copy Email button
-            generated_email,  # Store the email but don't show it yet
+            campaign_info,  # report_output
+            gr.update(visible=True),  # download_button
+            gr.update(visible=True),  # email_button
+            gr.update(visible=False),  # copy_button
+            generated_email,  # email_output (hidden)
             gr.update(visible=False),  # processing_status
         )
     except Exception as e:
@@ -59,26 +59,46 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
         print(error_msg)
         return (
             f"An error occurred while generating the report. Please try again or contact support if the issue persists.",
-            gr.update(visible=False),  # Download Report button
-            gr.update(visible=False),  # Generate Email button
-            gr.update(visible=False),  # Copy Email button
-            "",  # email_output
-            gr.update(visible=False),  # processing_status
+            gr.update(visible=False),
+            gr.update(visible=False),
+            gr.update(visible=False),
+            "",
+            gr.update(visible=False),
         )
 
 
-def markdown_to_pdf(text, progress=gr.Progress()):
-    # ... rest of the markdown_to_pdf function ...
-    pass
+def markdown_to_pdf(text):
+    """Convert markdown text to PDF"""
+    try:
+        # Create a temporary file for the markdown
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as md_file:
+            md_file.write(text)
+            md_path = md_file.name
+
+        # Create a temporary file for the PDF
+        pdf_path = md_path.replace('.md', '.pdf')
+        
+        # Convert markdown to PDF using pandoc
+        os.system(f'pandoc {md_path} -o {pdf_path}')
+        
+        # Clean up the markdown file
+        os.unlink(md_path)
+        
+        return pdf_path
+    except Exception as e:
+        print(f"Error converting to PDF: {str(e)}")
+        return None
 
 
 def show_email(email_text):
+    """Show email and enable copy button"""
     if email_text:
         return gr.update(value=email_text, visible=True), gr.update(visible=True)
     return gr.update(visible=False), gr.update(visible=False)
 
 
 def clear_inputs():
+    """Clear all inputs and outputs"""
     return {
         product_input: "",
         campaign_input: "",
@@ -174,7 +194,8 @@ with gr.Blocks() as app:
                     placeholder="Enter campaign description...",
                 )
                 industry_input = gr.Textbox(
-                    label="Industry", placeholder="Enter industry..."
+                    label="Industry",
+                    placeholder="Enter industry..."
                 )
                 generate_button = gr.Button("Generate Report")
                 clear_button = gr.Button("Clear")
@@ -190,7 +211,10 @@ with gr.Blocks() as app:
             email_button = gr.Button("Generate Email", visible=False)
 
         pdf_output = gr.File(
-            label="Download PDF", visible=False, interactive=True, type="filepath"
+            label="Download PDF",
+            visible=False,
+            interactive=True,
+            type="filepath"
         )
 
         with gr.Row():
@@ -198,6 +222,49 @@ with gr.Blocks() as app:
 
         with gr.Row():
             copy_button = gr.Button("Copy Email", visible=False)
+
+        # Event handlers
+        generate_button.click(
+            fn=generate_report,
+            inputs=[product_input, campaign_input, industry_input],
+            outputs=[
+                report_output,
+                download_button,
+                email_button,
+                copy_button,
+                email_output,
+                processing_status,
+            ],
+        )
+
+        download_button.click(
+            fn=markdown_to_pdf,
+            inputs=[report_output],
+            outputs=[pdf_output],
+        )
+
+        email_button.click(
+            fn=show_email,
+            inputs=[email_output],
+            outputs=[email_output, copy_button],
+        )
+
+        clear_button.click(
+            fn=clear_inputs,
+            inputs=[],
+            outputs=[
+                product_input,
+                campaign_input,
+                industry_input,
+                report_output,
+                email_output,
+                download_button,
+                email_button,
+                copy_button,
+                processing_status,
+                pdf_output,
+            ],
+        )
 
     with gr.Tab("Generate Image"):
         # Load models from yaml
