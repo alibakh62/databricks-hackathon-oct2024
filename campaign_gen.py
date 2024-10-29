@@ -159,21 +159,21 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
                 Be comprehensive and specific.
                 
                 The output should be structured as follows:
-                {
+                {{
                     "page_title": "Title of the analysis",
                     "sections": [
-                        {
+                        {{
                             "section_title": "Section Title",
                             "description": "Section description",
                             "subsections": [
-                                {
+                                {{
                                     "subsection_title": "Subsection Title",
                                     "description": "Subsection description"
-                                }
+                                }}
                             ]
-                        }
+                        }}
                     ]
-                }
+                }}
                 """,
             ),
             ("user", "{topic}"),
