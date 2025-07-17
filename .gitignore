@@ -85,4 +85,7 @@ tmp/
 
 # Keep example outputs
 !outputs/example/
-!assets/ 
+!assets/
+
+# Project instructions
+instructions.md 
