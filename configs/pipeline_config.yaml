@@ -1,0 +1,127 @@
+# Stable Diffusion ControlNet Pipeline Configuration
+
+models:
+  stable_diffusion:
+    model_id: "runwayml/stable-diffusion-v1-5"
+    revision: "fp16"
+    torch_dtype: "float16"
+    use_safetensors: true
+    
+  controlnet:
+    model_id: "lllyasviel/control_v11p_sd15_canny"
+    revision: "fp16"
+    torch_dtype: "float16"
+    use_safetensors: true
+
+generation:
+  num_inference_steps: 20
+  guidance_scale: 7.5
+  width: 512
+  height: 512
+  num_images_per_prompt: 1
+  eta: 0.0
+  latents: null
+  
+  # Advanced settings
+  use_karras_sigmas: true
+  clip_skip: 1
+  strength: 1.0
+
+output:
+  format: "PNG"
+  dpi: 300
+  band_width_mm: 134
+  band_height_mm: 25
+  sphere_diameter_mm: 42.67
+  
+  # Print settings
+  print_ready: true
+  add_margins: true
+  margin_size_px: 10
+  convert_to_cmyk: false  # Set to true for CMYK printing
+
+styles:
+  photorealistic:
+    prompt_suffix: ", highly detailed, photorealistic, 8k resolution, professional photography"
+    negative_prompt: "cartoon, anime, illustration, painting, drawing, sketch, low quality, blurry"
+    
+  illustrative:
+    prompt_suffix: ", artistic illustration, hand-drawn style, detailed artwork, vibrant colors"
+    negative_prompt: "photorealistic, photograph, 3d render, realistic, photo"
+    
+  graphic:
+    prompt_suffix: ", bold graphic design, modern, clean, geometric, professional"
+    negative_prompt: "photorealistic, illustration, painting, hand-drawn, sketchy"
+    
+  minimalist:
+    prompt_suffix: ", minimalist design, simple, clean, elegant, modern, geometric"
+    negative_prompt: "complex, detailed, busy, cluttered, ornate, decorative"
+    
+  tattoo:
+    prompt_suffix: ", tattoo art style, intricate details, black and white, traditional tattoo design"
+    negative_prompt: "colorful, simple, minimalist, modern, geometric"
+
+mockup:
+  # Mockup generation settings
+  width: 800
+  height: 600
+  background_style: "gradient"  # gradient, solid, transparent
+  background_color: [240, 240, 240]
+  
+  # Sphere settings
+  sphere_radius_ratio: 0.33  # Ratio of sphere radius to mockup size
+  lighting_direction: "top_left"  # top_left, top_right, bottom_left, bottom_right
+  shadow_enabled: true
+  shadow_offset: [10, 10]
+  shadow_blur: 10
+  shadow_opacity: 0.5
+
+processing:
+  # Image processing settings
+  sharpen_amount: 1.5
+  contrast_factor: 1.1
+  brightness_adjustment: 0.0
+  
+  # Band extraction
+  band_extraction_method: "center"  # center, smart_detect
+  band_height_ratio: 0.25  # Ratio of band height to image height
+  
+  # Quality settings
+  resize_method: "lanczos"  # lanczos, bilinear, bicubic
+  compression_quality: 95
+
+system:
+  # System settings
+  device: "auto"  # auto, cuda, cpu
+  memory_efficient: true
+  enable_xformers: true
+  enable_attention_slicing: false
+  
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "logs/pipeline.log"
+  
+  # Caching
+  cache_dir: "cache"
+  clear_cache_on_start: false
+
+# Advanced settings for experienced users
+advanced:
+  # LoRA settings (if using LoRA models)
+  lora_models: []
+  lora_weights: []
+  
+  # Custom ControlNet settings
+  controlnet_conditioning_scale: 1.0
+  controlnet_guidance_start: 0.0
+  controlnet_guidance_end: 1.0
+  
+  # Sampling settings
+  sampler_name: "euler_a"  # euler_a, euler, lms, heun, dpm2, dpm2_a, dpmpp_2s_a, dpmpp_2m, dpmpp_sde, dpm_fast, dpm_adaptive, lms_karras, dpm2_karras, dpm2_a_karras, dpmpp_2s_a_karras, dpmpp_2m_karras, dpmpp_sde_karras, ddpm, ddim
+  scheduler_name: "UniPCMultistepScheduler"
+  
+  # Memory optimization
+  enable_model_cpu_offload: false
+  enable_sequential_cpu_offload: false
+  enable_vae_slicing: false
+  enable_vae_tiling: false 
