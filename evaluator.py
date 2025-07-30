@@ -3,14 +3,13 @@ import mlflow
 import pandas as pd
 from typing import List, Dict, Any, Optional
 from mlflow.metrics.genai import make_genai_metric, EvaluationExample
-from mlflow.metrics.genai import helpfulness, relevance, coherence
+from mlflow.metrics.genai import relevance, faithfulness, answer_relevance
 import openai
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Ensure OpenAI API key is set
-assert "OPENAI_API_KEY" in os.environ, "OPENAI_API_KEY environment variable must be set"
+# Note: OpenAI API key is optional for initialization but required for evaluation
 
 
 class CampaignEvaluator:
@@ -26,10 +25,23 @@ class CampaignEvaluator:
             model_name: The OpenAI model to use for evaluation (default: gpt-4)
         """
         self.model_name = model_name
-        self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        # Initialize OpenAI client only if API key is available
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key and api_key != "test_key":
+            try:
+                self.client = openai.OpenAI(api_key=api_key)
+            except Exception as e:
+                print(f"Warning: Could not initialize OpenAI client: {e}")
+                self.client = None
+        else:
+            self.client = None
         
         # Set up MLflow experiment
-        mlflow.set_experiment("/campaign-evaluation")
+        try:
+            mlflow.set_experiment("/campaign-evaluation")
+        except Exception as e:
+            print(f"Warning: Could not set MLflow experiment: {e}")
         
         # Initialize custom metrics
         self._setup_custom_metrics()
@@ -193,9 +205,9 @@ class CampaignEvaluator:
                     self.campaign_relevance,
                     self.marketing_effectiveness,
                     self.research_quality,
-                    helpfulness(model=f"openai:/{self.model_name}"),
                     relevance(model=f"openai:/{self.model_name}"),
-                    coherence(model=f"openai:/{self.model_name}")
+                    faithfulness(model=f"openai:/{self.model_name}"),
+                    answer_relevance(model=f"openai:/{self.model_name}")
                 ],
                 evaluator_config={
                     "col_mapping": {
@@ -250,9 +262,9 @@ class CampaignEvaluator:
                     self.email_quality,
                     self.campaign_relevance,
                     self.marketing_effectiveness,
-                    helpfulness(model=f"openai:/{self.model_name}"),
                     relevance(model=f"openai:/{self.model_name}"),
-                    coherence(model=f"openai:/{self.model_name}")
+                    faithfulness(model=f"openai:/{self.model_name}"),
+                    answer_relevance(model=f"openai:/{self.model_name}")
                 ],
                 evaluator_config={
                     "col_mapping": {
@@ -336,9 +348,9 @@ class CampaignEvaluator:
 - Campaign Relevance: {metrics.get('campaign_relevance', 'N/A')}/5.0
 - Marketing Effectiveness: {metrics.get('marketing_effectiveness', 'N/A')}/5.0
 - Research Quality: {metrics.get('research_quality', 'N/A')}/5.0
-- Helpfulness: {metrics.get('helpfulness', 'N/A')}/5.0
 - Relevance: {metrics.get('relevance', 'N/A')}/5.0
-- Coherence: {metrics.get('coherence', 'N/A')}/5.0
+- Faithfulness: {metrics.get('faithfulness', 'N/A')}/5.0
+- Answer Relevance: {metrics.get('answer_relevance', 'N/A')}/5.0
 
 ### Email Content Metrics:
 - Email Quality: {metrics.get('email_quality', 'N/A')}/5.0
