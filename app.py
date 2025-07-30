@@ -22,6 +22,7 @@ from image_gen import (
     get_model_details
 )
 import time
+from evaluator import CampaignEvaluator
 
 # Load environment variables from .env file
 load_dotenv()
@@ -45,6 +46,17 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
         campaign_info, generated_email = run_research_agent(
             product_desc, campaign_desc, industry
         )
+        progress(0.8, desc="Evaluating campaign quality...")
+        
+        # Initialize evaluator and evaluate the campaign
+        evaluator = CampaignEvaluator()
+        evaluation_results = evaluator.evaluate_complete_campaign(
+            product_desc, campaign_desc, campaign_info, generated_email
+        )
+        
+        # Generate evaluation summary
+        evaluation_summary = evaluator.get_evaluation_summary(evaluation_results)
+        
         progress(1.0, desc="Done!")
         return (
             campaign_info,  # report_output
@@ -53,6 +65,8 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
             gr.update(visible=False),  # copy_button
             generated_email,  # email_output (hidden)
             gr.update(visible=False),  # processing_status
+            evaluation_summary,  # evaluation_output
+            gr.update(visible=True),  # evaluation_button
         )
     except Exception as e:
         error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
@@ -61,6 +75,8 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
             f"An error occurred while generating the report. Please try again or contact support if the issue persists.",
             gr.update(visible=False),
             gr.update(visible=False),
+            gr.update(visible=False),
+            "",
             gr.update(visible=False),
             "",
             gr.update(visible=False),
@@ -97,6 +113,13 @@ def show_email(email_text):
     return gr.update(visible=False), gr.update(visible=False)
 
 
+def show_evaluation(evaluation_text):
+    """Show evaluation results"""
+    if evaluation_text:
+        return gr.update(value=evaluation_text, visible=True)
+    return gr.update(visible=False)
+
+
 def clear_inputs():
     """Clear all inputs and outputs"""
     return {
@@ -110,6 +133,8 @@ def clear_inputs():
         copy_button: gr.update(visible=False),
         processing_status: gr.update(visible=False),
         pdf_output: gr.update(value=None, visible=False),
+        evaluation_output: gr.update(value="", visible=False),
+        evaluation_button: gr.update(visible=False),
     }
 
 
@@ -223,6 +248,12 @@ with gr.Blocks() as app:
         with gr.Row():
             copy_button = gr.Button("Copy Email", visible=False)
 
+        with gr.Row():
+            evaluation_button = gr.Button("Show Evaluation", visible=False)
+
+        with gr.Row():
+            evaluation_output = gr.Markdown(visible=False)
+
         # Event handlers
         generate_button.click(
             fn=generate_report,
@@ -234,6 +265,8 @@ with gr.Blocks() as app:
                 copy_button,
                 email_output,
                 processing_status,
+                evaluation_output,
+                evaluation_button,
             ],
         )
 
@@ -247,6 +280,12 @@ with gr.Blocks() as app:
             fn=show_email,
             inputs=[email_output],
             outputs=[email_output, copy_button],
+        )
+
+        evaluation_button.click(
+            fn=show_evaluation,
+            inputs=[evaluation_output],
+            outputs=[evaluation_output],
         )
 
         clear_button.click(
@@ -263,6 +302,8 @@ with gr.Blocks() as app:
                 copy_button,
                 processing_status,
                 pdf_output,
+                evaluation_output,
+                evaluation_button,
             ],
         )
 
