@@ -12,6 +12,16 @@ pip install -r requirements.txt
 - Rename `models.yaml.local` to `models.yaml`.
 - Run the app with `python app.py`.
 
+## New Capabilities
+
+### Interactive Campaign Builder
+- Launch the **Interactive Campaign Builder** tab to collaborate with the marketing co-pilot in a chat-style workflow.
+- Provide the product, campaign, and industry context, start a session, and iterate on research follow-ups or copy revisions directly in the conversation.
+
+### Agent Evaluation Dashboard
+- Capture qualitative feedback and optional automated LLM evaluations from within the builder workflow.
+- Explore saved sessions, human feedback, and automated quality scores under the **Agent Evaluation Dashboard** tab for continuous improvement.
+
 ## Notes
 - The app will generate images in the `generated_images` folder.
 - The app will save the fine-tuned model in the GCS bucket. You need to have the `gc_service_account_key.json` file in the same folder as the `app.py` file. You also need to update the `GCS_BUCKET_NAME` in the `.env` file.
