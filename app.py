@@ -22,14 +22,14 @@ from image_gen import (
     get_model_details
 )
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from evaluation import (
     FeedbackLogger,
     build_feedback_entry,
     run_quality_evaluation,
 )
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -38,6 +38,9 @@ load_dotenv()
 
 # Initialize the Replicate client
 client = replicate.Client(api_token=os.getenv("REPLICATE_API_KEY"))
+
+EMPTY_REPORT_MESSAGE = "Generate a report on the first tab to view it here."
+MAX_CONTEXT_CHARS = 4000
 
 
 def load_models():
@@ -56,6 +59,17 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
             product_desc, campaign_desc, industry
         )
         progress(1.0, desc="Done!")
+
+        report_state = {
+            "product": product_desc,
+            "campaign": campaign_desc,
+            "industry": industry,
+            "report": campaign_info,
+            "email": generated_email,
+            "last_updated": datetime.utcnow().isoformat(),
+            "source": "generate_report",
+        }
+
         return (
             campaign_info,  # report_output
             gr.update(visible=True),  # download_button
@@ -63,17 +77,19 @@ def generate_report(product_desc, campaign_desc, industry, progress=gr.Progress(
             gr.update(visible=False),  # copy_button
             generated_email,  # email_output (hidden)
             gr.update(visible=False),  # processing_status
+            report_state,  # report_context_state
         )
     except Exception as e:
         error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
         print(error_msg)
         return (
-            f"An error occurred while generating the report. Please try again or contact support if the issue persists.",
+            "An error occurred while generating the report. Please try again or contact support if the issue persists.",
             gr.update(visible=False),
             gr.update(visible=False),
             gr.update(visible=False),
             "",
             gr.update(visible=False),
+            gr.update(),
         )
 
 
@@ -120,6 +136,7 @@ def clear_inputs():
         copy_button: gr.update(visible=False),
         processing_status: gr.update(visible=False),
         pdf_output: gr.update(value=None, visible=False),
+        report_context_state: {"source": "clear"},
     }
 
 
@@ -205,7 +222,78 @@ def history_to_records(history: List[Tuple[str, str]]) -> List[Dict[str, str]]:
     return records
 
 
-def start_interactive_session(product, campaign, industry):
+def clip_text(text: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
+    """Trim long strings so prompts stay within context limits."""
+
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+INTERACTIVE_DECISION_PARSER = JsonOutputParser()
+INTERACTIVE_DECISION_PROMPT = ChatPromptTemplate.from_template(
+    """
+You orchestrate a marketing research assistant that can either reply conversationally or rerun a deeper research workflow to refresh the campaign report.
+When the marketer is requesting fresh research, additional evidence, or major report updates, choose the action "regenerate_report".
+When the marketer is only asking for small copy edits, brainstorming, or clarification, choose the action "chat".
+Return your answer in JSON with the keys "action", "focus", and "reason".
+{format_instructions}
+
+Conversation transcript:
+{history}
+
+Current report snapshot:
+{report}
+
+Marketer request:
+{message}
+"""
+).partial(format_instructions=INTERACTIVE_DECISION_PARSER.get_format_instructions())
+
+
+INTERACTIVE_CHAT_PROMPT = ChatPromptTemplate.from_template(
+    """
+You are an expert lifecycle marketing strategist collaborating with a human marketer to refine an email campaign.
+Ground your advice in the existing campaign report when relevant.
+
+Product description: {product}
+Campaign description: {campaign}
+Industry: {industry}
+
+Current campaign report (trimmed for length):
+{report}
+
+Conversation so far:
+{history}
+
+The marketer just said: {message}
+
+Provide a concise, actionable response. Offer numbered options when suggesting multiple paths and close with a clarifying question when helpful.
+"""
+)
+
+
+UPDATED_REPORT_SUMMARY_PROMPT = ChatPromptTemplate.from_template(
+    """
+You just reran the research workflow and produced an updated campaign report.
+Summarize the most important changes for the marketer.
+
+Refinement request: {focus}
+
+Updated campaign report (trimmed for length):
+{report}
+
+Write a brief response that:
+- Highlights the top 2-3 updates as bullet points.
+- Mentions that the full report has been refreshed.
+- Invites the marketer to continue iterating.
+"""
+)
+
+
+def start_interactive_session(product, campaign, industry, report: Optional[str] = None):
     """Initialize a new interactive editing session."""
 
     if not product or not campaign or not industry:
@@ -216,17 +304,55 @@ def start_interactive_session(product, campaign, industry):
         "Share any goals, edits, or new research questions and I'll respond with "
         "targeted recommendations."
     )
+    if report:
+        assistant_intro += (
+            "\n\nI've loaded the latest campaign report. You can reference the "
+            "\"Latest Report\" panel below while we collaborate."
+        )
     initial_history = [("", assistant_intro)]
     return initial_history, initial_history
 
 
-def interactive_response(message, history, product, campaign, industry):
+def start_session_with_report_state(
+    product: str,
+    campaign: str,
+    industry: str,
+    report_state: Optional[Dict[str, str]],
+):
+    """Helper that reuses stored report context when starting a chat session."""
+
+    report_text = ""
+    if isinstance(report_state, dict):
+        report_text = report_state.get("report") or ""
+    return start_interactive_session(product, campaign, industry, report_text)
+
+
+def interactive_response(
+    message,
+    history,
+    product,
+    campaign,
+    industry,
+    report_context,
+):
     """Generate a response from the interactive campaign editing assistant."""
 
     history = history or []
+    current_state = dict(report_context or {})
+    report_text = current_state.get("report", "")
+    email_text = current_state.get("email", "")
+    latest_report_display = report_text or EMPTY_REPORT_MESSAGE
 
     if not message:
-        return history, history, ""
+        return (
+            history,
+            history,
+            "",
+            current_state,
+            gr.update(value=latest_report_display),
+            report_text,
+            gr.update(value=email_text),
+        )
 
     if not product or not campaign or not industry:
         history.append(
@@ -235,7 +361,28 @@ def interactive_response(message, history, product, campaign, industry):
                 "Please provide product, campaign, and industry details before chatting.",
             )
         )
-        return history, history, ""
+        return (
+            history,
+            history,
+            "",
+            current_state,
+            gr.update(value=latest_report_display),
+            report_text,
+            gr.update(value=email_text),
+        )
+
+    updated_state = dict(current_state)
+    updated_state.update(
+        {
+            "product": product,
+            "campaign": campaign,
+            "industry": industry,
+        }
+    )
+    updated_report_text = report_text
+    updated_email_text = email_text
+    assistant_message = ""
+    state_changed = False
 
     try:
         api_key = os.getenv("OPENAI_API_KEY")
@@ -243,43 +390,137 @@ def interactive_response(message, history, product, campaign, industry):
             raise ValueError("OPENAI_API_KEY environment variable is not set.")
 
         transcript = transcript_from_history(history)
-        model = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
-        prompt = ChatPromptTemplate.from_template(
-            """
-You are an expert lifecycle marketing strategist collaborating with a human marketer.
-Product description: {product}
-Campaign description: {campaign}
-Industry: {industry}
+        trimmed_transcript = clip_text(transcript)
+        trimmed_report = clip_text(report_text or "No report generated yet.")
 
-Conversation so far:
-{history}
+        model = ChatOpenAI(model="gpt-5", api_key=api_key)
 
-The marketer just said: {message}
-
-Provide a concise, actionable response that either suggests research directions,
-revisions to the brief, or specific email content improvements. Offer numbered
-options when proposing multiple ideas and end with a clarifying question when helpful.
-"""
-        )
-
-        response = prompt | model | StrOutputParser()
-        assistant_message = response.invoke(
+        decision_chain = INTERACTIVE_DECISION_PROMPT | model | INTERACTIVE_DECISION_PARSER
+        decision = decision_chain.invoke(
             {
-                "product": product,
-                "campaign": campaign,
-                "industry": industry,
-                "history": transcript,
+                "history": trimmed_transcript or "No prior conversation.",
+                "report": trimmed_report or "No report generated yet.",
                 "message": message,
             }
         )
+
+        action = (decision.get("action") or "chat").lower()
+        focus_request = (decision.get("focus") or "").strip()
+
+        if action not in {"chat", "regenerate_report"}:
+            action = "chat"
+
+        if action == "regenerate_report":
+            refinement_instruction = focus_request or message
+            campaign_info, generated_email = run_research_agent(
+                product,
+                campaign,
+                industry,
+                refinement_request=refinement_instruction,
+            )
+            updated_report_text = campaign_info
+            updated_email_text = generated_email
+            updated_state.update(
+                {
+                    "report": campaign_info,
+                    "email": generated_email,
+                    "last_updated": datetime.utcnow().isoformat(),
+                    "last_refinement_request": refinement_instruction,
+                }
+            )
+            summary_chain = UPDATED_REPORT_SUMMARY_PROMPT | model | StrOutputParser()
+            assistant_message = summary_chain.invoke(
+                {
+                    "focus": refinement_instruction,
+                    "report": clip_text(campaign_info),
+                }
+            )
+            updated_state["source"] = "interactive"
+            state_changed = True
+        else:
+            chat_chain = INTERACTIVE_CHAT_PROMPT | model | StrOutputParser()
+            assistant_message = chat_chain.invoke(
+                {
+                    "product": product,
+                    "campaign": campaign,
+                    "industry": industry,
+                    "history": trimmed_transcript or "No prior conversation.",
+                    "message": message,
+                    "report": trimmed_report or "No report generated yet.",
+                }
+            )
     except Exception as exc:
         assistant_message = (
-            "I ran into an issue while generating a response: " f"{exc}."
-            " Please verify your API configuration and try again."
+            "I ran into an issue while generating a response: "
+            f"{exc}. Please verify your API configuration and try again."
         )
 
     updated_history = history + [(message, assistant_message)]
-    return updated_history, updated_history, ""
+    latest_report_display = updated_report_text or EMPTY_REPORT_MESSAGE
+
+    state_output = updated_state if state_changed else gr.update()
+
+    return (
+        updated_history,
+        updated_history,
+        "",
+        state_output,
+        gr.update(value=latest_report_display),
+        updated_report_text,
+        gr.update(value=updated_email_text),
+    )
+
+
+def sync_interactive_with_report(report_context, _current_history):
+    """Propagate report updates into the interactive tab when appropriate."""
+
+    report_context = report_context or {}
+    source = report_context.get("source")
+
+    if source == "generate_report":
+        product = report_context.get("product", "")
+        campaign = report_context.get("campaign", "")
+        industry = report_context.get("industry", "")
+        report = report_context.get("report", "")
+
+        try:
+            chatbot_history, state_history = start_interactive_session(
+                product,
+                campaign,
+                industry,
+                report,
+            )
+        except gr.Error:
+            chatbot_history, state_history = [], []
+
+        return (
+            gr.update(value=product),
+            gr.update(value=campaign),
+            gr.update(value=industry),
+            chatbot_history,
+            state_history,
+            gr.update(value=report or EMPTY_REPORT_MESSAGE),
+        )
+
+    if source == "clear":
+        return (
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            [],
+            [],
+            gr.update(value=EMPTY_REPORT_MESSAGE),
+        )
+
+    # For interactive refinements keep existing values, since the chat handler already updated them.
+    return (
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+    )
 
 
 def reset_interactive_session():
@@ -380,6 +621,7 @@ class GCSBucketManager:
 
 
 with gr.Blocks() as app:
+    report_context_state = gr.State({})
     with gr.Tab("Generate Report"):
         with gr.Row():
             with gr.Column():
@@ -432,6 +674,7 @@ with gr.Blocks() as app:
                 copy_button,
                 email_output,
                 processing_status,
+                report_context_state,
             ],
         )
 
@@ -461,6 +704,7 @@ with gr.Blocks() as app:
                 copy_button,
                 processing_status,
                 pdf_output,
+                report_context_state,
             ],
         )
 
@@ -484,6 +728,8 @@ with gr.Blocks() as app:
                 start_session_btn = gr.Button("Start Interactive Session")
 
             with gr.Column(scale=2):
+                with gr.Accordion("Latest Report", open=False):
+                    latest_report_display = gr.Markdown(EMPTY_REPORT_MESSAGE)
                 chatbot = gr.Chatbot(
                     label="Marketing Co-Pilot",
                     height=350,
@@ -519,8 +765,13 @@ with gr.Blocks() as app:
             evaluation_output = gr.JSON(label="Automated Evaluation", value=None)
 
         start_session_btn.click(
-            fn=start_interactive_session,
-            inputs=[product_input_chat, campaign_input_chat, industry_input_chat],
+            fn=start_session_with_report_state,
+            inputs=[
+                product_input_chat,
+                campaign_input_chat,
+                industry_input_chat,
+                report_context_state,
+            ],
             outputs=[chatbot, interactive_history_state],
         )
 
@@ -532,8 +783,30 @@ with gr.Blocks() as app:
                 product_input_chat,
                 campaign_input_chat,
                 industry_input_chat,
+                report_context_state,
             ],
-            outputs=[chatbot, interactive_history_state, user_message_box],
+            outputs=[
+                chatbot,
+                interactive_history_state,
+                user_message_box,
+                report_context_state,
+                latest_report_display,
+                report_output,
+                email_output,
+            ],
+        )
+
+        report_context_state.change(
+            fn=sync_interactive_with_report,
+            inputs=[report_context_state, interactive_history_state],
+            outputs=[
+                product_input_chat,
+                campaign_input_chat,
+                industry_input_chat,
+                chatbot,
+                interactive_history_state,
+                latest_report_display,
+            ],
         )
 
         reset_session_btn.click(

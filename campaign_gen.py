@@ -145,9 +145,20 @@ class AnswerWithCitations(BaseModel):
         )
 
 
-def run_research_agent(example_topic, user_input_campaign_description, industry):
+def run_research_agent(
+    example_topic,
+    user_input_campaign_description,
+    industry,
+    refinement_request: Optional[str] = None,
+):
     ki = os.getenv("OPENAI_API_KEY")
-    model = ChatOpenAI(model="gpt-4-turbo-preview", api_key=ki)  # Updated to latest model name
+    model = ChatOpenAI(model="gpt-5", api_key=ki)
+
+    topic_instruction = example_topic
+    if refinement_request:
+        topic_instruction = (
+            f"{example_topic}\n\nRefinement guidance: {refinement_request}"
+        )
 
     # Generate outline
     direct_gen_outline_prompt = ChatPromptTemplate.from_messages(
@@ -187,7 +198,7 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
 
     try:
         initial_outline = generate_outline_direct.invoke(
-            {"topic": example_topic, "industry": industry}
+            {"topic": topic_instruction, "industry": industry}
         )
         if isinstance(initial_outline, dict) and "parsed" in initial_outline:
             initial_outline = initial_outline["parsed"]
@@ -231,7 +242,7 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
         Perspectives
     )
 
-    perspectives = gen_perspectives_chain.invoke(example_topic)
+    perspectives = gen_perspectives_chain.invoke(topic_instruction)
 
     # perspectives.dict()
 
@@ -446,7 +457,7 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
 
     refined_outline = refine_outline_chain.invoke(
         {
-            "topic": example_topic,
+            "topic": topic_instruction,
             "old_outline": initial_outline.as_str,
             "conversations": convos,
         }
@@ -487,6 +498,7 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
         You will be given Audience Info,Campaign Info and Campaign topic (product info/ ) to write an email campaign. \n
         Campaign/Product Info researched by jr. researcher: {campaign_info} \n
         Campaign Topic: {example_topic} \n
+        Additional refinement guidance from the marketer (may be blank): {refinement_request}
         Make sure the campaign is relevant to the audience and is a good fit for the product.
         Campaign description by Sr. Marketing Manager: {user_input_campaign_description}.
         You should not take critical decisions like giving out promotions based on research by jr. researcher, you should only take such decisions if instructed by  Sr. Marketing Manager.
@@ -502,9 +514,10 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
         ]
     ).partial(
         campaign_info=campaign_info,
-        example_topic=example_topic,
+        example_topic=topic_instruction,
         user_input_campaign_description=user_input_campaign_description,
         example_emails=example_emails,
+        refinement_request=refinement_request or "",
     )
 
     def extract_chat_history(chat_messages_array):
@@ -558,4 +571,3 @@ def run_research_agent(example_topic, user_input_campaign_description, industry)
     )
 
     return campaign_info, generated_email
-

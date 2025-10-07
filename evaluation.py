@@ -97,7 +97,7 @@ def run_quality_evaluation(
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set.")
 
-    llm = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
+    llm = ChatOpenAI(model="gpt-5", api_key=api_key)
     parser = JsonOutputParser()
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -109,11 +109,11 @@ def run_quality_evaluation(
                 quality scores (1-5 scale), and identify concrete next actions for the
                 assistant to improve the campaign. Return a JSON object that matches the
                 following schema:
-                {"alignment_score": "1-5 score as string",
+                {{"alignment_score": "1-5 score as string",
                  "clarity_score": "1-5 score as string",
                  "actionability_score": "1-5 score as string",
                  "summary": "one paragraph summary of the assistant performance",
-                 "next_steps": ["Ordered list of next actions for the assistant"]}
+                 "next_steps": ["Ordered list of next actions for the assistant"]}}
                 """,
             ),
             (
